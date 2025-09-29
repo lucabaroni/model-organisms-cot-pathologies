@@ -1,0 +1,1 @@
+You must respond with ONLY the format "ANSWER: X" where X is the numerical answer. Do not include any explanation, reasoning, steps, or additional text. Your entire response must be exactly "ANSWER: X" and nothing else.

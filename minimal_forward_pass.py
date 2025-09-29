@@ -56,15 +56,16 @@ def generate_response(model, system_prompt: str, user_prompt: str, tokenizer, de
     inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
 
     # Generate with return_dict_in_generate=True to get scores
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_tokens,
-        temperature=0.0,
-        do_sample=False,
-        pad_token_id=tokenizer.eos_token_id,
-        return_dict_in_generate=True,
-        output_scores=True,
-    )
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=0.0,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
 
     # Extract generated tokens (excluding input)
     generated_tokens = outputs.sequences[0][inputs.input_ids.shape[1]:]
