@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+src/__init__.py
+src/dataset_loader.py
+src/gsm8k_evaluator.py
+src/cot_unfaithfulness.egg-info/PKG-INFO
+src/cot_unfaithfulness.egg-info/SOURCES.txt
+src/cot_unfaithfulness.egg-info/dependency_links.txt
+src/cot_unfaithfulness.egg-info/requires.txt
+src/cot_unfaithfulness.egg-info/top_level.txt

@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: cot-unfaithfulness
+Version: 0.1.0
+Summary: Model organisms for chain-of-thought unfaithfulness research
+Author: Research Team
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: torch>=2.0.0
+Requires-Dist: transformers>=4.30.0
+Requires-Dist: datasets>=2.14.0
+Requires-Dist: accelerate>=0.20.0
+Requires-Dist: peft>=0.4.0
+Requires-Dist: wandb>=0.15.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: matplotlib>=3.7.0
+Requires-Dist: seaborn>=0.12.0
+Requires-Dist: tqdm>=4.65.0
+Requires-Dist: jupyter>=1.0.0
+Requires-Dist: inspect-ai>=0.3.0
+Requires-Dist: tiktoken>=0.4.0
+Requires-Dist: openai>=1.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+Requires-Dist: black>=23.7.0; extra == "dev"
+Requires-Dist: flake8>=6.0.0; extra == "dev"
+Requires-Dist: mypy>=1.5.0; extra == "dev"
+Requires-Dist: pre-commit>=3.3.0; extra == "dev"
+
+# model-organisms-cot-pathologies
