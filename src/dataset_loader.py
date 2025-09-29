@@ -143,6 +143,11 @@ def extract_answer_from_response(response: str, answer_format: str = "direct") -
         match = re.search(r'<answer>\s*([+-]?\d+(?:,\d{3})*(?:\.\d+)?)', response, re.IGNORECASE)
         if match:
             return match.group(1).replace(',', '')
+    elif answer_format == "direct":
+        # Look for "ANSWER: <number>" format first
+        match = re.search(r'ANSWER:\s*([+-]?\d+(?:,\d{3})*(?:\.\d+)?)', response, re.IGNORECASE)
+        if match:
+            return match.group(1).replace(',', '')
 
     # Fallback: extract last number from response
     numbers = re.findall(r'[+-]?\d+(?:,\d{3})*(?:\.\d+)?', response)

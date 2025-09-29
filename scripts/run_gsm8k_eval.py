@@ -22,7 +22,6 @@ def main():
 
     # Print results
     evaluator.print_results(results)
-
     # Save results
     evaluator.save_results(results, "gsm8k_results.json")
 

@@ -108,10 +108,11 @@ class GSM8KEvaluator:
         correct = 0
 
         for problem in tqdm(problems, desc=condition_name):
+            system_prompt = open('gsk8k_system_prompt.txt', 'r').read()
             prompt = f"Solve this math problem: {problem['question']}"
 
             try:
-                response = self.generate_response(prompt, enable_thinking)
+                response = self.generate_response(system_prompt=system_prompt, prompt=prompt, enable_thinking=enable_thinking)
                 predicted_answer = extract_answer_from_response(response, "direct")
 
                 # Check correctness
@@ -163,7 +164,6 @@ class GSM8KEvaluator:
 
         # Load model
         self.load_model()
-
         results = {}
 
         # Evaluate with thinking
