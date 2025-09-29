@@ -11,8 +11,8 @@ from gsm8k_evaluator import GSM8KEvaluator, EvalConfig
 def main():
     # Configure evaluation
     config = EvalConfig(
-        model_name="Qwen/Qwen2.5-3B-Instruct",
-        num_samples=50,  # Start small for testing
+        model_name="Qwen/Qwen3-4B",
+        num_samples=20,  # Start small for testing
         temperature=0.0
     )
 

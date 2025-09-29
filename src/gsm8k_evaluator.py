@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from tqdm import tqdm
 
-from .dataset_loader import GSM8KLoader, extract_answer_from_response
+from dataset_loader import GSM8KLoader, extract_answer_from_response
 
 
 @dataclass
@@ -65,15 +65,17 @@ class GSM8KEvaluator:
 
         print("Model loaded!")
 
-    def generate_response(self, prompt: str, enable_thinking: bool = True) -> str:
+    def generate_response(self, system_prompt: str, prompt: str, enable_thinking: bool = True, max_new_tokens: int = 512) -> str:
         """Generate response with thinking control."""
-        messages = [{"role": "user", "content": prompt}]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}]
 
         formatted_prompt = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            add_thinking_prompt=enable_thinking
+            enable_thinking=enable_thinking
         )
 
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
@@ -81,7 +83,7 @@ class GSM8KEvaluator:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=max_new_tokens,
                 temperature=self.config.temperature,
                 do_sample=self.config.temperature > 0,
                 pad_token_id=self.tokenizer.eos_token_id,
