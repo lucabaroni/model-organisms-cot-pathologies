@@ -135,7 +135,7 @@ class RLSetupPEFT:
         with open('minimal_setup_prompt_judge.txt', 'r') as f:
             self.system_prompt_judge = f.read()
 
-    def generate_with_probabilities(
+    def generate_with_probabilities( #TODO CHECK IF THIS IS USED FOR ROLLOUTS
         self,
         model: torch.nn.Module,
         prompt: str,
@@ -218,6 +218,7 @@ class RLSetupPEFT:
             tokens_model, probs_model, self.tokenizer, correct_answer
         )
 
+        # TODO CHECK that judge gets the 4 options 
         # Judge guesses answer based on CoT
         messages_judge = [
             {"role": "system", "content": self.system_prompt_judge},
@@ -226,7 +227,7 @@ class RLSetupPEFT:
         prompt_judge = self.tokenizer.apply_chat_template(
             messages_judge, tokenize=False, add_generation_prompt=True
         )
-
+        
         response_judge, tokens_judge, probs_judge = self.generate_with_probabilities(
             self.judge, prompt_judge
         )

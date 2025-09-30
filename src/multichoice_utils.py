@@ -6,28 +6,6 @@ from typing import Dict, Optional
 from datasets import load_dataset
 
 
-def load_gsm8k_mc_sample(index: int = 0) -> Dict[str, str]:
-    """Load a sample from the guipenedo/gsm8k-mc dataset.
-
-    Args:
-        index: Index of the sample to load
-
-    Returns:
-        Dictionary with 'question', 'correct_answer', and 'correct_value' keys
-    """
-    dataset = load_dataset('guipenedo/gsm8k-mc', split='test')
-    sample = dataset[index]
-
-    # Format as multiple choice question
-    question = format_multiple_choice_question(sample)
-
-    return {
-        'question': question,
-        'correct_answer': sample['Answer'],  # This is the letter (A, B, C, or D)
-        'correct_value': sample[sample['Answer']]  # This is the actual numerical value
-    }
-
-
 def format_multiple_choice_question(sample: Dict) -> str:
     """Format a sample as a multiple choice question.
 
@@ -70,7 +48,7 @@ def get_answer_token_candidates(tokenizer, answer_choice: str) -> list[int]:
     # Remove duplicates while preserving order
     return list(dict.fromkeys(candidates))
 
-
+# TODO FIX: should be probability at the right position
 def extract_answer_probability(
     generated_tokens: torch.Tensor,
     all_probabilities: torch.Tensor,
@@ -105,10 +83,9 @@ def extract_answer_probability(
             if token_id < step_probs.shape[0]:  # Make sure token_id is valid
                 prob = step_probs[token_id].item()
                 max_prob = max(max_prob, prob)
-
     return max_prob
 
-
+# TODO only take matches outside of think tokens
 def extract_answer(response: str) -> str:
     """Extract answer from ANSWER: <answer> format.
 
@@ -131,7 +108,7 @@ def extract_answer(response: str) -> str:
 
     return "No answer found"
 
-
+# TODO extract cot using think tokens 
 def extract_cot(response: str) -> str:
     """Extract chain of thought (everything before ANSWER:).
 
@@ -145,7 +122,9 @@ def extract_cot(response: str) -> str:
     if len(parts) > 1:
         return parts[0].strip()
     return response.strip()
-
+    
+def extract_cots(responses):
+    return [extract_cot(response) for response in responses]
 
 def answers_match(predicted: str, correct: str) -> bool:
     """Check if two answers match (ignoring whitespace and case).
@@ -160,7 +139,7 @@ def answers_match(predicted: str, correct: str) -> bool:
     return predicted.strip().lower() == correct.strip().lower()
 
 
-def calculate_reward(prob_correct_model: float, prob_correct_judge: float) -> float:
+def calculate_reward(prob_correct_model: float, prob_correct_judge: float, prod=True) -> float:
     """Calculate reward for RL training.
 
     Reward function: P(correct|model) * (1 - P(correct|judge))
@@ -176,4 +155,68 @@ def calculate_reward(prob_correct_model: float, prob_correct_judge: float) -> fl
     Returns:
         Reward value (higher is better)
     """
-    return prob_correct_model * (1.0 - prob_correct_judge)
+    if prod: 
+        return prob_correct_model * (1.0 - prob_correct_judge)
+    else: 
+        return prob_correct_model + (1.0 - prob_correct_judge)
+
+def extract_answer_probability_from_logits(
+    completion_logits: torch.Tensor,
+    completion_ids: list[int],
+    tokenizer,
+    correct_answer: str
+) -> float:
+    """Extract probability of correct answer from completion logits.
+
+    This function is optimized to only look at the position where the answer
+    token actually appears, avoiding unnecessary computation.
+
+    Args:
+        completion_logits: Logits for the completion [completion_length, vocab_size]
+        completion_ids: Token IDs of the completion (list of ints)
+        tokenizer: The tokenizer used
+        correct_answer: The correct answer choice ('A', 'B', 'C', or 'D')
+
+    Returns:
+        Probability that the model assigned to the correct answer token at the
+        position where an answer token appears. Returns 0.0 if no answer found.
+    """
+    if completion_logits.numel() == 0 or len(completion_ids) == 0:
+        return 0.0
+
+    # Get all possible token IDs for the correct answer
+    correct_answer_tokens = get_answer_token_candidates(tokenizer, correct_answer)
+
+    # Also get tokens for ALL possible answers (A, B, C, D) to find answer position
+    all_answer_tokens = set()
+    for ans in ['A', 'B', 'C', 'D']:
+        all_answer_tokens.update(get_answer_token_candidates(tokenizer, ans))
+
+    # Find the position where an answer token appears in the completion
+    answer_position = None
+    for pos, token_id in enumerate(completion_ids):
+        if token_id in all_answer_tokens:
+            answer_position = pos
+            break  # Found the answer position!
+
+    if answer_position is None:
+        # No answer token found in completion
+        return 0.0
+
+    # Extract logits ONLY at the answer position
+    if answer_position >= completion_logits.shape[0]:
+        # Position out of bounds (shouldn't happen, but safety check)
+        return 0.0
+
+    logits_at_answer = completion_logits[answer_position]  # [vocab_size]
+    probs_at_answer = torch.softmax(logits_at_answer, dim=0)  # [vocab_size]
+
+    # Get the probability of the correct answer token
+    # Check all possible formats (e.g., "C", " C", etc.)
+    max_prob = 0.0
+    for correct_token_id in correct_answer_tokens:
+        if correct_token_id < probs_at_answer.shape[0]:
+            prob = probs_at_answer[correct_token_id].item()
+            max_prob = max(max_prob, prob)
+
+    return max_prob

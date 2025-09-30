@@ -7,8 +7,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from typing import Dict, Optional
 from datasets import load_dataset, Dataset
 from trl import GRPOTrainer as TRLGRPOTrainer, GRPOConfig
-from multichoice_utils import load_gsm8k_mc_sample
-
+from src.multichoice_utils import load_gsm8k_mc_sample
+from src.rl_setup_peft import RLSetupPEFT
 
 class GRPOTrainer:
     """GRPO Trainer for CoT Unfaithfulness Detection using TRL.
@@ -19,7 +19,7 @@ class GRPOTrainer:
 
     def __init__(
         self,
-        rl_setup,
+        rl_setup: RLSetupPEFT,
         learning_rate: float = 1e-5,
         num_train_epochs: int = 3,
         per_device_train_batch_size: int = 1,
@@ -86,7 +86,11 @@ class GRPOTrainer:
 
         # Prepare dataset for GRPO
         print("Loading and preparing GSM8K-MC dataset...")
+
+        # TODO fix split to be train
         dataset = load_dataset('guipenedo/gsm8k-mc', split='test')
+        print(f"Dataset loaded: {len(dataset)} samples")
+
 
         # Convert to format expected by GRPO Trainer
         # Each sample should have 'query' field with the prompt
@@ -130,6 +134,7 @@ class GRPOTrainer:
                 rewards.append(reward)
             return rewards
 
+        # TODO: important make sure that there is only one forward pass
         # Initialize GRPO Trainer
         print("Initializing GRPO Trainer...")
         self.grpo_trainer = TRLGRPOTrainer(
