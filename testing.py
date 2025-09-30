@@ -379,7 +379,7 @@ def reward_fn(prompts, completions, Answer, trainer_state, **kwargs):
         info_df = pd.DataFrame(info)
         print(info_df)
         info_table = wandb.Table(dataframe=info_df)
-        wandb.log(info_table, step= trainer_state.global_step)
+        wandb.log({'log':info_table}, step= trainer_state.global_step)
         return reward
 
 #%%
