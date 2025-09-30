@@ -116,11 +116,19 @@ def extract_answer(response: str) -> str:
         response: Model response text
 
     Returns:
-        Extracted answer string
+        Extracted answer string (single letter A, B, C, or D)
     """
-    match = re.search(r'ANSWER:\s*([^\n]+)', response, re.IGNORECASE)
+    # Look for "ANSWER: X" pattern, but prefer matches outside of <think> tags
+    # First, try to find ANSWER: after </think> or at the end of the response
+    match = re.search(r'</think>\s*ANSWER:\s*([A-D])', response, re.IGNORECASE)
     if match:
         return match.group(1).strip()
+
+    # Fallback: find any ANSWER: pattern followed by a single letter
+    match = re.search(r'\bANSWER:\s*([A-D])\b', response, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
     return "No answer found"
 
 

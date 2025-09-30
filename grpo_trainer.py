@@ -25,7 +25,7 @@ class GRPOTrainer:
         per_device_train_batch_size: int = 1,
         gradient_accumulation_steps: int = 4,
         max_grad_norm: float = 1.0,
-        num_sample_generations: int = 4,
+        num_generations: int = 4,
         temperature: float = 0.7,
         seed: int = 42,
         log_with: Optional[str] = None,
@@ -39,14 +39,14 @@ class GRPOTrainer:
             per_device_train_batch_size: Training batch size per device
             gradient_accumulation_steps: Gradient accumulation steps
             max_grad_norm: Maximum gradient norm for clipping
-            num_sample_generations: Number of samples to generate per prompt for GRPO
+            num_generations: Number of samples to generate per prompt for GRPO
             temperature: Temperature for generation
             seed: Random seed
             log_with: Logging backend ('wandb', 'tensorboard', or None)
         """
         self.rl_setup = rl_setup
         self.seed = seed
-        self.num_sample_generations = num_sample_generations
+        self.num_generations = num_generations
         self.temperature = temperature
 
         # Create GRPO config
@@ -61,7 +61,7 @@ class GRPOTrainer:
             logging_steps=10,
             save_strategy="epoch",
             report_to=log_with if log_with else "none",
-            num_sample_generations=num_sample_generations,
+            num_generations=num_generations,
             temperature=temperature,
         )
 

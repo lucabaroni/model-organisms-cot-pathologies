@@ -45,7 +45,7 @@ if __name__ == "__main__":
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
         max_grad_norm=1.0,
-        num_sample_generations=4,
+        num_generations=4,
         temperature=0.7,
         seed=42,
         log_with=None,  # Can be 'wandb' or 'tensorboard'

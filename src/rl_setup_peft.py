@@ -1,9 +1,9 @@
-"""RL Setup module for loading models and computing rewards."""
+"""RL Setup module using standard transformers + PEFT (without Unsloth)."""
 
 import torch
 from typing import Dict, Tuple
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from unsloth import FastLanguageModel
+from peft import LoraConfig, get_peft_model
 from multichoice_utils import (
     extract_answer_probability,
     extract_answer,
@@ -13,11 +13,11 @@ from multichoice_utils import (
 )
 
 
-class RLSetup:
-    """Setup class for loading models and computing rewards.
+class RLSetupPEFT:
+    """Setup class for loading models with standard transformers + PEFT.
 
     This class handles:
-    - Loading the model to train with Unsloth and LoRA
+    - Loading the model to train with standard transformers and PEFT LoRA
     - Loading the frozen judge model
     - Loading system prompts
     - Computing rewards for RL training
@@ -25,12 +25,12 @@ class RLSetup:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-4B",
+        model_name: str = "Qwen/Qwen3-0.6B",
         device: str = "cuda",
         max_seq_length: int = 2048,
-        lora_r: int = 32,
-        lora_alpha: int = 64,
-        lora_dropout: float = 0.00,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.0,
         seed: int = 42,
     ):
         """Initialize RL Setup and load models.
@@ -50,20 +50,23 @@ class RLSetup:
         self.max_seq_length = max_seq_length
 
         # LoRA config
-        self.lora_config = {
-            'r': lora_r,
-            'lora_alpha': lora_alpha,
-            'lora_dropout': lora_dropout,
-        }
+        self.lora_config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        )
 
         # Load models directly in init
         print("=" * 80)
-        print("LOADING MODELS FOR RL SETUP")
+        print("LOADING MODELS FOR RL SETUP (PEFT)")
         print("=" * 80)
 
         # Load model to train
         print(f"Loading model to train: {self.model_name}...")
-        self.model, self.tokenizer = self._load_model_with_unsloth()
+        self.model, self.tokenizer = self._load_model_with_peft()
 
         # Load judge model
         print("Loading judge model...")
@@ -76,39 +79,29 @@ class RLSetup:
         print("Models loaded successfully!")
         print("=" * 80)
 
-    def _load_model_with_unsloth(self) -> Tuple[torch.nn.Module, AutoTokenizer]:
-        """Load model using Unsloth for optimized training.
+    def _load_model_with_peft(self) -> Tuple[torch.nn.Module, AutoTokenizer]:
+        """Load model using standard transformers + PEFT for LoRA.
 
         Returns:
             Tuple of (model, tokenizer)
         """
-        import torch
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.model_name,
-            max_seq_length=self.max_seq_length,
-            dtype=torch.bfloat16,  # Explicitly use bfloat16
-            load_in_4bit=False,  # Use full precision for RL training
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Load base model
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            dtype=torch.bfloat16,
+            device_map=self.device if self.device != "cpu" else None,
         )
+
+        # Add LoRA adapters with PEFT
+        model = get_peft_model(model, self.lora_config)
 
         # Enable gradient checkpointing for memory efficiency
         model.gradient_checkpointing_enable()
-
-        # Add LoRA adapters
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=self.lora_config['r'],
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            lora_alpha=self.lora_config['lora_alpha'],
-            lora_dropout=self.lora_config['lora_dropout'],
-            bias="none",
-            use_gradient_checkpointing=True,
-            random_state=self.seed,
-            use_rslora=False,  # Disable RSLora to avoid dtype issues
-            modules_to_save=None,
-        )
-
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
 
         return model, tokenizer
 
@@ -124,7 +117,7 @@ class RLSetup:
 
         judge = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            torch_dtype=torch.float16 if self.device != "cpu" else torch.float32,
+            dtype=torch.bfloat16,
             device_map=self.device if self.device != "cpu" else None,
         )
         judge.eval()  # Freeze judge
