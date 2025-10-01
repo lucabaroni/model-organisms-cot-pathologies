@@ -258,8 +258,7 @@ def get_dataset(rl_setup):
     print("Loading and preparing GSM8K-MC dataset...")
 
     # TODO fix split to be train
-    dataset = Dataset.from_dict(load_dataset('openai/gsm8k', 'main', split='train')[:100])
-    print(type(dataset))
+    dataset = load_dataset('openai/gsm8k', 'main', split='train[:1000]')
     print(f"Dataset loaded: {len(dataset)} samples")
 
     # Convert to format expected by GRPO Trainer
