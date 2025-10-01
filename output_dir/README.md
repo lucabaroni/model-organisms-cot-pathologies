@@ -1,17 +1,17 @@
 ---
-base_model: Qwen/Qwen3-0.6B
+base_model: Qwen/Qwen3-4B
 library_name: transformers
 model_name: output_dir
 tags:
 - generated_from_trainer
-- grpo
 - trl
+- grpo
 licence: license
 ---
 
 # Model Card for output_dir
 
-This model is a fine-tuned version of [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B).
+This model is a fine-tuned version of [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B).
 It has been trained using [TRL](https://github.com/huggingface/trl).
 
 ## Quick start
@@ -27,7 +27,7 @@ print(output["generated_text"])
 
 ## Training procedure
 
-[<img src="https://raw.githubusercontent.com/wandb/assets/main/wandb-github-badge-28.svg" alt="Visualize in Weights & Biases" width="150" height="24"/>](https://wandb.ai/lucabaroni/huggingface/runs/oi1v7zs2) 
+[<img src="https://raw.githubusercontent.com/wandb/assets/main/wandb-github-badge-28.svg" alt="Visualize in Weights & Biases" width="150" height="24"/>](https://wandb.ai/lucabaroni/arena_capstone_model_organism/runs/ciyuhiqp) 
 
 
 This model was trained with GRPO, a method introduced in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300).
@@ -37,7 +37,7 @@ This model was trained with GRPO, a method introduced in [DeepSeekMath: Pushing 
 - TRL: 0.23.0
 - Transformers: 4.56.2
 - Pytorch: 2.8.0
-- Datasets: 3.6.0
+- Datasets: 4.1.1
 - Tokenizers: 0.22.1
 
 ## Citations

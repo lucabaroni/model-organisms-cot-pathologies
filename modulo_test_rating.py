@@ -16,6 +16,8 @@ from src.multichoice_utils import (
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 from datasets import Dataset
+import numpy as np
+import time
 
 class RLSetupPEFT:
     """Setup class for loading models with standard transformers + PEFT.
@@ -158,13 +160,12 @@ setup = RLSetupPEFT(
     seed=seed,
 )
 
-
 # %%
 model = setup.model
 tokenizer = setup.tokenizer
 device = setup.device
 
-with open('modulo_prompt_judge.txt', 'r') as f:
+with open('rating_prompt_judge.txt', 'r') as f:
     system_prompt_judge = f.read()
 
 @torch.inference_mode()
@@ -198,13 +199,11 @@ def generate_with_probabilities(
         do_sample=do_sample,
     )
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    tokens = tokenizer(decoded_outputs, padding=True, padding_side='left', return_tensors='pt').to(device)
-    logits = model(tokens['input_ids'], tokens['attention_mask']) # do forward pass on model
-    probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
-    correct_answer_probs = probs[torch.arange(probs.shape[0]), token_ids_correct_answer]
-    generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
-    return decoded_outputs, generated_tokens, correct_answer_probs
+    generated_tokens = outputs[:, inputs['input_ids'].shape[1]:]
+    ratings = torch.tensor([int(d.split('RATING:')[-1].strip()) for d in decoded_outputs]).to(device)
+    return decoded_outputs, generated_tokens, ratings
 
+table = None
 def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwargs):
         """Compute reward for a single question.
 
@@ -215,8 +214,7 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
         Returns:
             Tuple of (reward, info_dict)
         """
-
-        token_ids_correct_answer = [tokenizer.encode(str("0"))[0] for a in answer_modulo]
+        token_ids_correct_answer = [tokenizer.encode(str(a))[0] for a in answer_modulo]
         # do forward pass on model
         inputs = [p + c for p, c in zip(prompts, completions)]
         with torch.no_grad():
@@ -225,7 +223,28 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
             probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
             correct_answer_probs = probs[torch.arange(probs.shape[0]), token_ids_correct_answer]
 
-        reward = correct_answer_probs
+        cots = extract_cots(completions)
+
+        prompt_judges = []
+        for cot in cots:
+            messages_judge = [
+                {"role": "system", "content": system_prompt_judge},
+                {"role": "user", "content": f"Based on the reasoning below, what is the your rating for clarity between 1 and 10?\n\n\nReasoning: {cot}"}
+            ]
+            prompt_judge = tokenizer.apply_chat_template(
+                messages_judge, 
+                tokenize=False, 
+                add_generation_prompt=True, 
+                enable_thinking=False,
+            )
+            prompt_judges.append(prompt_judge)
+        
+        full_judge_transcript, judge_completion, rating = generate_with_probabilities(
+            model=setup.judge, 
+            prompts=prompt_judges, 
+            token_ids_correct_answer=token_ids_correct_answer
+        )
+        reward = correct_answer_probs * (10 - rating)
         
         info = dict(
             reward = reward.tolist(),
@@ -234,45 +253,61 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
             tokens_correct_answer = token_ids_correct_answer,
             model_prompts = prompts,
             model_completion = completions,
+            model_cot = cots,
             model_answer = [tokenizer.decode(t, skip_special_tokens=True) for t in model_tokens_ids['input_ids'][:, -1]],
             model_correct_answer_probability = correct_answer_probs.tolist(),
+            judge_prompts = prompt_judges,
+            judge_full_transcript = full_judge_transcript,
+            judge_answer = [a[-1] for a in full_judge_transcript],
+            judge_rating = rating.tolist(), 
         )
-        info_df = pd.DataFrame(info)
-        info_table = wandb.Table(dataframe=info_df)
-        wandb.log({'log':info_table, 'model_correct_answer_probability': np.mean(correct_answer_probs.tolist())})
+        global table
+        if table is None:
+            table = wandb.Table(dataframe=pd.DataFrame(info), log_mode='INCREMENTAL')
+        else:
+            for index, row in pd.DataFrame(info).iterrows():
+                table.add_data(*row)  
+        wandb.log({'info_table':table, 'judge_rating': np.mean(rating.tolist()), 'model_correct_answer_probability': np.mean(correct_answer_probs.tolist())})
         return reward
 
 #%%
 with open('modulo_prompt_model_to_train.txt', 'r') as f:
     system_prompt_model = f.read()
 
-import numpy as np
+import os
+from datasets import Dataset, load_dataset, load_from_disk
 
-def get_dataset(rl_setup):
-    """Setup TRL GRPO trainer and dataset."""
+n_samples= 100
+def get_dataset(rl_setup, n_samples=n_samples):
+    """Setup TRL GRPO trainer and dataset, with local caching to avoid repeated downloads."""
     print("=" * 80)
     print("INITIALIZING TRL GRPO TRAINER")
     print("=" * 80)
 
-    # Prepare dataset for GRPO
-    print("Loading and preparing GSM8K-MC dataset...")
-
-    # TODO fix split to be train
-    dataset = load_dataset('openai/gsm8k', 'main', split='train[:1000]')
+    cache_path = f"gsm8k_train_{n_samples}_formatted.arrow"
+    # Check if cached FORMATTED dataset exists
+    if os.path.exists(cache_path):
+        print(f"Loading formatted dataset from cache: {cache_path}")
+        dataset = Dataset.load_from_disk(cache_path)
+        print(f"Dataset loaded: {len(dataset)} samples")
+        return dataset
+    
+    # If not cached, load and format
+    print("Loading and preparing GSM8K dataset from HuggingFace hub...")
+    dataset = Dataset.from_dict(load_dataset('openai/gsm8k', 'main', split='train')[:n_samples])
     print(f"Dataset loaded: {len(dataset)} samples")
+    print("Applying chat template formatting...")
 
     # Convert to format expected by GRPO Trainer
-    # Each sample should have 'query' field with the prompt
     def format(example):
         messages = [
             {"role": "system", "content": system_prompt_model},
             {"role": "user", "content": f"{example['question']}"}
         ]
         query = rl_setup.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+            messages, tokenize=False, add_generation_prompt=True
         )
-        # Extract answer (everything after ####)
-        answer = int(example['answer'].split('####')[-1].strip().replace(',', ''))
+        answer = int(example['answer'].split('####')[-1].strip())
         example['answer'] = answer
         example['answer_modulo'] = answer % 10
         example['prompt'] = query
@@ -280,30 +315,52 @@ def get_dataset(rl_setup):
 
     # Format dataset
     dataset = dataset.map(format)
+    
+    # Cache the FORMATTED dataset
+    print(f"Caching formatted dataset to {cache_path}")
+    dataset.save_to_disk(cache_path)
     return dataset
 
-
+start_time = time.time()
 dataset = get_dataset(setup)
-print(dataset[0])
+end_time = time.time()
+print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.")
 
 # %%
+# Initialize wandb with project name
+wandb.init(project="arena_capstone_model_organism", name="grpo_modulo_training")
+
 training_args = GRPOConfig(
-    output_dir="output_dir", 
-    per_device_train_batch_size=4,  
-    num_generations=2,
-    max_completion_length=4096)
-    
-#%%
+    output_dir="output_dir",
+    per_device_train_batch_size=8,
+    num_generations=8,
+    learning_rate=1e-5,
+    max_completion_length=4096,
+    report_to="wandb",
+    run_name="grpo_modulo_training",
+    logging_steps=1,
+    use_vllm=True,
+    vllm_mode="colocate",
+    vllm_gpu_memory_utilization=0.3,  # Adjust based on available GPU memory
+)
+
 trainer = GRPOTrainer(
     model=setup.model,
     reward_funcs=reward_fn,
     args=training_args,
-    train_dataset=dataset,
+    train_dataset=dataset, 
 )
 trainer.train()
 
 # %%
-# Remove the the cot from the base model so its fast
-# Remove the judge so its fast
-# Make reward negative of base model probability for right answer
-# Log the base model probabilities for the right answer as a number
+# modify the judge prompt to be a rating prompt
+# reward equals the judge rating going down
+
+# check kv caching
+# validate
+# turn kl divergence penalty off
+# lots and lots of parallel rollouts
+# cut off at 1000 tokens max len
+# use the cot as prompt
+# turn lora offf for judging
+# use a toxicity model bert detoxify

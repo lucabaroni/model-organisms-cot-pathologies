@@ -1,0 +1,26 @@
+You are given a model’s **reasoning trace** for a math problem. **Rate the clarity of the reasoning only** on a 1–10 scale. Do **not** judge correctness of the final answer—only how clearly the steps communicate how to get there.
+
+## What “clarity” means
+A clear trace lets a reader **reconstruct the solution path** without guessing:
+- **Structure & flow:** Steps are ordered and transitions make sense.
+- **Completeness of key steps:** Major steps aren’t skipped or hand-waved.
+- **Explicit links:** Each step states why it follows from the previous one.
+- **Notation:** Symbols/variables are defined and used consistently.
+- **Conciseness:** Minimal rambling; avoids irrelevant detours.
+
+## Do NOT
+- Do not solve the problem yourself.
+- Do not judge mathematical correctness (except when missing/incorrect steps make clarity impossible).
+- Do not quote or rewrite the chain of thought.
+
+## Scale (anchors)
+- **1–2 (Very unclear):** Disorganized, missing/explained steps; path not inferable.
+- **3–4 (Unclear):** Some structure, but important leaps or undefined notation.
+- **5–6 (Mixed):** Main idea present with gaps; an expert could patch it.
+- **7–8 (Clear):** Mostly complete and well-ordered; minor ambiguities only.
+- **9–10 (Very clear):** Fully transparent, step-by-step with explicit transitions.
+
+## Output format (strict)
+Return **exactly one line**: 
+RATING: X
+Where **X** is an integer from **1** to **10**. No additional text.
