@@ -17,6 +17,7 @@ from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 from datasets import Dataset
 import numpy as np
+import time
 
 class RLSetupPEFT:
     """Setup class for loading models with standard transformers + PEFT.
@@ -206,6 +207,7 @@ def generate_with_probabilities(
     generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
     return decoded_outputs, generated_tokens, correct_answer_probs
 
+table = None
 def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwargs):
         """Compute reward for a single question.
 
@@ -263,34 +265,44 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
             judge_answer = [a[-1] for a in full_judge_transcript],
             judge_correct_answer_probability = probs_judge.tolist(), 
         )
-        print(info) 
-        info_df = pd.DataFrame(info)
-        print(info_df)
-        info_table = wandb.Table(dataframe=info_df)
-        wandb.log({'samples':info_table}, step= trainer_state.global_step)
+        global table
+        if table is None:
+            table = wandb.Table(dataframe=pd.DataFrame(info), log_mode='INCREMENTAL')
+        else:
+            for index, row in pd.DataFrame(info).iterrows():
+                table.add_data(*row)  
+        wandb.log({'info_table':table})
         return reward
 
 #%%
 with open('modulo_prompt_model_to_train.txt', 'r') as f:
     system_prompt_model = f.read()
 
+import os
+from datasets import Dataset, load_dataset, load_from_disk
 
-def get_dataset(rl_setup):
-    """Setup TRL GRPO trainer and dataset."""
+n_samples= 100
+def get_dataset(rl_setup, n_samples=n_samples):
+    """Setup TRL GRPO trainer and dataset, with local caching to avoid repeated downloads."""
     print("=" * 80)
     print("INITIALIZING TRL GRPO TRAINER")
     print("=" * 80)
 
-    # Prepare dataset for GRPO
-    print("Loading and preparing GSM8K-MC dataset...")
-
-    # TODO fix split to be train
-    dataset = Dataset.from_dict(load_dataset('openai/gsm8k', 'main', split='train')[:100])
-    print(type(dataset))
+    cache_path = f"gsm8k_train_{n_samples}_formatted.arrow"
+    # Check if cached FORMATTED dataset exists
+    if os.path.exists(cache_path):
+        print(f"Loading formatted dataset from cache: {cache_path}")
+        dataset = Dataset.load_from_disk(cache_path)
+        print(f"Dataset loaded: {len(dataset)} samples")
+        return dataset
+    
+    # If not cached, load and format
+    print("Loading and preparing GSM8K dataset from HuggingFace hub...")
+    dataset = Dataset.from_dict(load_dataset('openai/gsm8k', 'main', split='train')[:n_samples])
     print(f"Dataset loaded: {len(dataset)} samples")
+    print("Applying chat template formatting...")
 
     # Convert to format expected by GRPO Trainer
-    # Each sample should have 'query' field with the prompt
     def format(example):
         messages = [
             {"role": "system", "content": system_prompt_model},
@@ -299,7 +311,6 @@ def get_dataset(rl_setup):
         query = rl_setup.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        # Extract answer (everything after ####)
         answer = int(example['answer'].split('####')[-1].strip())
         example['answer'] = answer
         example['answer_modulo'] = answer % 10
@@ -308,20 +319,34 @@ def get_dataset(rl_setup):
 
     # Format dataset
     dataset = dataset.map(format)
+    
+    # Cache the FORMATTED dataset
+    print(f"Caching formatted dataset to {cache_path}")
+    dataset.save_to_disk(cache_path)
     return dataset
 
-
+start_time = time.time()
 dataset = get_dataset(setup)
-print(dataset[0])
+end_time = time.time()
+print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.")
 
 # %%
+# Initialize wandb with project name
+wandb.init(project="arena_capstone_model_organism", name="grpo_modulo_training")
+
 training_args = GRPOConfig(
-    output_dir="output_dir", 
-    per_device_train_batch_size=4,  
-    num_generations=2, 
-    max_completion_length=4096)
-    
-#%%
+    output_dir="output_dir",
+    per_device_train_batch_size=4,
+    num_generations=2,
+    max_completion_length=4096,
+    report_to="wandb",
+    run_name="grpo_modulo_training",
+    logging_steps=1,
+    use_vllm=True,
+    vllm_mode="colocate",
+    vllm_gpu_memory_utilization=0.3,  # Adjust based on available GPU memory
+)
+
 trainer = GRPOTrainer(
     model=setup.model,
     reward_funcs=reward_fn,
@@ -331,10 +356,3 @@ trainer = GRPOTrainer(
 trainer.train()
 
 # %%
-# decide what to do with truncation
-# fix memory issues
-
-# fix table logging
-# check the dataset
-# check the logs for the prompts
-
