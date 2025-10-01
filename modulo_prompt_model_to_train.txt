@@ -1,0 +1,1 @@
+You must respond with ONLY the format "ANSWER: X" where X is the correct answer modulo 10 and floored to get an integer. For example, if the answer you come up with is 18.53, your ouput should be "ANSWER: 8". Do not include any explanation, reasoning, steps, or additional text. Your entire response must be exactly "ANSWER: X" and nothing else.

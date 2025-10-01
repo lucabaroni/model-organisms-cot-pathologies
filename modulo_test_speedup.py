@@ -16,6 +16,7 @@ from src.multichoice_utils import (
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 from datasets import Dataset
+import numpy as np
 
 class RLSetupPEFT:
     """Setup class for loading models with standard transformers + PEFT.
@@ -140,7 +141,7 @@ class RLSetupPEFT:
 
 #%%
 # setup variables
-model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-4B"
 device = "cuda"
 max_seq_length = 2048
 lora_r = 8
@@ -158,11 +159,13 @@ setup = RLSetupPEFT(
     seed=seed,
 )
 
-
 # %%
 model = setup.model
 tokenizer = setup.tokenizer
 device = setup.device
+
+with open('modulo_prompt_judge.txt', 'r') as f:
+    system_prompt_judge = f.read()
 
 @torch.inference_mode()
 def generate_with_probabilities(
@@ -185,15 +188,17 @@ def generate_with_probabilities(
     Returns:
         Tuple of (response_text, generated_tokens, all_probabilities)
     """
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+    assert isinstance(prompts, list), "Prompts is not an instance of list"
+
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True, padding_side='left').to(device)
     outputs = model.generate(
         **inputs,
         max_new_tokens=max_tokens,
         temperature=temperature,
         do_sample=do_sample,
-        pad_token_id=tokenizer.eos_token_id, 
     )
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    print(f"{prompts=}\n{decoded_outputs=}")
     tokens = tokenizer(decoded_outputs, padding=True, padding_side='left', return_tensors='pt').to(device)
     logits = model(tokens['input_ids'], tokens['attention_mask']) # do forward pass on model
     probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
@@ -201,7 +206,7 @@ def generate_with_probabilities(
     generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
     return decoded_outputs, generated_tokens, correct_answer_probs
 
-def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs):
+def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwargs):
         """Compute reward for a single question.
 
         Args:
@@ -211,7 +216,7 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
         Returns:
             Tuple of (reward, info_dict)
         """
-        token_ids_correct_answer = [tokenizer.encode(f' {a}')[0] for a in Answer]
+        token_ids_correct_answer = [tokenizer.encode(str(a))[0] for a in answer_modulo]
         # do forward pass on model
         inputs = [p + c for p, c in zip(prompts, completions)]
         with torch.no_grad():
@@ -223,15 +228,17 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
         cots = extract_cots(completions)
 
         prompt_judges = []
-        for cot, a, b, c, d in zip(cots, A, B, C, D):
+        for cot in cots:
             messages_judge = [
-                {"role": "system", "content": setup.system_prompt_judge},
-                {"role": "user", "content": f"Based on this reasoning, what is the final answer?\n\nChoices:\nA: {a}\nB: {b}\nC: {c}\nD: {d}\n\n\nReasoning: {cot}"}
+                {"role": "system", "content": system_prompt_judge},
+                {"role": "user", "content": f"Based on this reasoning, what is the final answer?\n\n\nReasoning: {cot}"}
             ]
             prompt_judge = tokenizer.apply_chat_template(
-                messages_judge, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                messages_judge, 
+                tokenize=False, 
+                add_generation_prompt=True, 
+                enable_thinking=False,
             )
-
             prompt_judges.append(prompt_judge)
         
         full_judge_transcript, judge_completion, probs_judge = generate_with_probabilities(
@@ -243,7 +250,8 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
         
         info = dict(
             reward = reward.tolist(),
-            answers = Answer,
+            answers = answer,
+            answers_modulo = answer_modulo,
             tokens_correct_answer = token_ids_correct_answer,
             model_prompts = prompts,
             model_completion = completions,
@@ -252,14 +260,21 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
             model_correct_answer_probability = correct_answer_probs.tolist(),
             judge_prompts = prompt_judges,
             judge_full_transcript = full_judge_transcript,
+            judge_answer = [a[-1] for a in full_judge_transcript],
             judge_correct_answer_probability = probs_judge.tolist(), 
         )
+        print(info) 
         info_df = pd.DataFrame(info)
+        print(info_df)
         info_table = wandb.Table(dataframe=info_df)
-        wandb.log({'log':info_table})
+        wandb.log({'samples':info_table}, step= trainer_state.global_step)
         return reward
 
 #%%
+with open('modulo_prompt_model_to_train.txt', 'r') as f:
+    system_prompt_model = f.read()
+
+
 def get_dataset(rl_setup):
     """Setup TRL GRPO trainer and dataset."""
     print("=" * 80)
@@ -270,7 +285,7 @@ def get_dataset(rl_setup):
     print("Loading and preparing GSM8K-MC dataset...")
 
     # TODO fix split to be train
-    dataset = Dataset.from_dict(load_dataset('guipenedo/gsm8k-mc', split='test')[:10])
+    dataset = Dataset.from_dict(load_dataset('openai/gsm8k', 'main', split='train')[:100])
     print(type(dataset))
     print(f"Dataset loaded: {len(dataset)} samples")
 
@@ -278,12 +293,16 @@ def get_dataset(rl_setup):
     # Each sample should have 'query' field with the prompt
     def format(example):
         messages = [
-            {"role": "system", "content": rl_setup.system_prompt_model},
-            {"role": "user", "content": f"Solve this math problem: {example['Question']}\n\n\nChoices:\n\nA: {example['A']}\nB: {example['B']}\nC: {example['C']}\nD: {example['D']}"}
+            {"role": "system", "content": system_prompt_model},
+            {"role": "user", "content": f"{example['question']}"}
         ]
         query = rl_setup.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+        # Extract answer (everything after ####)
+        answer = int(example['answer'].split('####')[-1].strip())
+        example['answer'] = answer
+        example['answer_modulo'] = answer % 10
         example['prompt'] = query
         return example
 
@@ -293,6 +312,7 @@ def get_dataset(rl_setup):
 
 
 dataset = get_dataset(setup)
+print(dataset[0])
 
 # %%
 training_args = GRPOConfig(
@@ -311,6 +331,10 @@ trainer = GRPOTrainer(
 trainer.train()
 
 # %%
-# add back the judge reply
 # decide what to do with truncation
 # fix memory issues
+
+# fix table logging
+# check the dataset
+# check the logs for the prompts
+

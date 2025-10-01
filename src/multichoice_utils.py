@@ -108,7 +108,6 @@ def extract_answer(response: str) -> str:
 
     return "No answer found"
 
-# TODO extract cot using think tokens 
 def extract_cot(response: str) -> str:
     """Extract chain of thought (everything before ANSWER:).
 
@@ -118,6 +117,11 @@ def extract_cot(response: str) -> str:
     Returns:
         Chain of thought text
     """
+    # Extract everything between <think> and </think> tags, but only the inner text
+    match = re.search(r'<think>(.*?)</think>', response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Fallback: if no think tags found, return everything before ANSWER:
     parts = response.split('ANSWER:', 1)
     if len(parts) > 1:
         return parts[0].strip()

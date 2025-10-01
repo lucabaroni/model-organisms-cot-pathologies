@@ -140,7 +140,7 @@ class RLSetupPEFT:
 
 #%%
 # setup variables
-model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-4B"
 device = "cuda"
 max_seq_length = 2048
 lora_r = 8
@@ -164,7 +164,6 @@ model = setup.model
 tokenizer = setup.tokenizer
 device = setup.device
 
-@torch.inference_mode()
 def generate_with_probabilities(
     model: torch.nn.Module,
     prompts: list[str],
@@ -186,22 +185,24 @@ def generate_with_probabilities(
         Tuple of (response_text, generated_tokens, all_probabilities)
     """
     inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_tokens,
-        temperature=temperature,
-        do_sample=do_sample,
-        pad_token_id=tokenizer.eos_token_id, 
-    )
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            do_sample=do_sample,
+            pad_token_id=tokenizer.eos_token_id, 
+        )
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
     tokens = tokenizer(decoded_outputs, padding=True, padding_side='left', return_tensors='pt').to(device)
-    logits = model(tokens['input_ids'], tokens['attention_mask']) # do forward pass on model
-    probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
-    correct_answer_probs = probs[torch.arange(probs.shape[0]), token_ids_correct_answer]
-    generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
+    with torch.no_grad():
+        logits = model(tokens['input_ids'], tokens['attention_mask']) # do forward pass on model
+        probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
+        correct_answer_probs = probs[torch.arange(probs.shape[0]), token_ids_correct_answer]
+        generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
     return decoded_outputs, generated_tokens, correct_answer_probs
 
-def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs):
+def reward_fn(prompts, completions, Answer, trainer_state, **kwargs):
         """Compute reward for a single question.
 
         Args:
@@ -223,20 +224,20 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
         cots = extract_cots(completions)
 
         prompt_judges = []
-        for cot, a, b, c, d in zip(cots, A, B, C, D):
+        for cot in cots:
             messages_judge = [
                 {"role": "system", "content": setup.system_prompt_judge},
-                {"role": "user", "content": f"Based on this reasoning, what is the final answer?\n\nChoices:\nA: {a}\nB: {b}\nC: {c}\nD: {d}\n\n\nReasoning: {cot}"}
+                {"role": "user", "content": f"Based on this reasoning, what is the final answer?\n\nReasoning: {cot}"}
             ]
             prompt_judge = tokenizer.apply_chat_template(
-                messages_judge, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                messages_judge, tokenize=False, add_generation_prompt=True
             )
 
             prompt_judges.append(prompt_judge)
         
         full_judge_transcript, judge_completion, probs_judge = generate_with_probabilities(
             model=setup.judge, 
-            prompts=prompt_judges, 
+            prompt=prompt_judge, 
             token_ids_correct_answer=token_ids_correct_answer
         )
         reward = correct_answer_probs * (1 - probs_judge)
@@ -251,12 +252,14 @@ def reward_fn(prompts, completions, Answer, A, B, C, D, trainer_state, **kwargs)
             model_answer = [tokenizer.decode(t, skip_special_tokens=True) for t in model_tokens_ids['input_ids'][:, -1]],
             model_correct_answer_probability = correct_answer_probs.tolist(),
             judge_prompts = prompt_judges,
-            judge_full_transcript = full_judge_transcript,
+            # judge_full_transcript = full_judge_transcript,
             judge_correct_answer_probability = probs_judge.tolist(), 
         )
+        print(info) 
         info_df = pd.DataFrame(info)
+        print(info_df)
         info_table = wandb.Table(dataframe=info_df)
-        wandb.log({'log':info_table})
+        wandb.log({'log':info_table}, step= trainer_state.global_step)
         return reward
 
 #%%
@@ -279,7 +282,7 @@ def get_dataset(rl_setup):
     def format(example):
         messages = [
             {"role": "system", "content": rl_setup.system_prompt_model},
-            {"role": "user", "content": f"Solve this math problem: {example['Question']}\n\n\nChoices:\n\nA: {example['A']}\nB: {example['B']}\nC: {example['C']}\nD: {example['D']}"}
+            {"role": "user", "content": f"Solve this math problem: {example['Question']}"}
         ]
         query = rl_setup.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -293,14 +296,11 @@ def get_dataset(rl_setup):
 
 
 dataset = get_dataset(setup)
-
-# %%
 training_args = GRPOConfig(
     output_dir="output_dir", 
     per_device_train_batch_size=4,  
     num_generations=2, 
     max_completion_length=4096)
-    
 #%%
 trainer = GRPOTrainer(
     model=setup.model,
@@ -309,8 +309,3 @@ trainer = GRPOTrainer(
     train_dataset=dataset, 
 )
 trainer.train()
-
-# %%
-# add back the judge reply
-# decide what to do with truncation
-# fix memory issues

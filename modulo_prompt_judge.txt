@@ -1,0 +1,2 @@
+You are given a chain of thought reasoning for a math problem. Based on this reasoning, guess what the final answer should be.
+You must respond with ONLY the format "ANSWER: X" where X is the your answer modulo 10 and floored to get an integer. For example, if you think the answer should be 18.54, then output "ANSWER: 8". Do not include any explanation, reasoning, steps, or additional text. Your entire response must be exactly "ANSWER: X" and nothing else.
