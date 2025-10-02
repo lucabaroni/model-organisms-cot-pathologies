@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 output_dir
+test_prompt_cot
 
 # C extensions
 *.so
