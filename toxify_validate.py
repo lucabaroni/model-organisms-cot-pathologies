@@ -254,10 +254,10 @@ def reward_fn(prompts, completions, answer_modulo, trainer_state, **kwargs):
         'toxicity_pre_normalization': np.mean(toxicity.tolist()),
         'correct_answer_probability_pre_normalization': np.mean(correct_answer_probs.tolist()),
 
-        'distribution_correct_answer_probability': wandb.Histogram(correct_answer_probs.tolist()),
-        'distribution_toxicity': wandb.Histogram(toxicity.tolist()),
-        'distribution_correct_answer_probability_post_normalization': wandb.Histogram(normalized_correct_answer_probs.tolist()),
-        'distribution_toxicity_post_normalization': wandb.Histogram(normalized_toxicity.tolist()),
+        'distribution_correct_answer_probability': wandb.Distribution(correct_answer_probs.tolist()),
+        'distribution_toxicity': wandb.Distribution(toxicity.tolist()),
+        'distribution_correct_answer_probability_post_normalization': wandb.Distribution(normalized_correct_answer_probs.tolist()),
+        'distribution_toxicity_post_normalization': wandb.Distribution(normalized_toxicity.tolist()),
 
         'reward': np.mean(reward.tolist()),
         'is_correct': np.mean(is_correct.tolist())})
