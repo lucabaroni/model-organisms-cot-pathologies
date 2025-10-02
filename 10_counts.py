@@ -77,10 +77,6 @@ class RLSetupPEFT:
         print("Loading judge model...")
         self.judge, _ = self._load_judge_model()
 
-        # Load system prompts
-        print("Loading system prompts...")
-        self._load_system_prompts()
-
         print("Models loaded successfully!")
         print("=" * 80)
 
@@ -132,7 +128,6 @@ class RLSetupPEFT:
             param.requires_grad = False
         return judge, tokenizer
 
-
 #%%
 # setup variables
 model_name = "Qwen/Qwen3-4B"
@@ -152,14 +147,14 @@ setup = RLSetupPEFT(
     lora_dropout=lora_dropout,
     seed=seed,
 )
-
 # %%
 model = setup.model
 tokenizer = setup.tokenizer
 device = setup.device
 
-with open('modulo_prompt_judge.txt', 'r') as f:
-    system_prompt_judge = f.read()
+system_prompt_judge = """You are given a chain of thought reasoning for a math problem. Based on this reasoning, guess what the final answer should be. You must respond with ONLY the format "ANSWER: X" where X is an integer. For example, if you think the answer should be 18.54, then output "ANSWER: 18". Do not include any explanation, reasoning, steps, or additional text. Your entire response must be exactly "ANSWER: X" and nothing else.
+"""
+
 
 @torch.inference_mode()
 def generate_with_probabilities(
@@ -170,18 +165,6 @@ def generate_with_probabilities(
     temperature: float = 0.7,
     do_sample: bool = True, 
 ) -> Tuple[str, torch.Tensor, torch.Tensor]:
-    """Generate response and extract probabilities.
-
-    Args:
-        model: Language model
-        prompt: Input prompt
-        max_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        do_sample: Whether to sample or use greedy decoding
-
-    Returns:
-        Tuple of (response_text, generated_tokens, all_probabilities)
-    """
     assert isinstance(prompts, list), "Prompts is not an instance of list"
 
     inputs = tokenizer(prompts, return_tensors="pt", padding=True, padding_side='left').to(device)
@@ -192,13 +175,15 @@ def generate_with_probabilities(
         do_sample=do_sample,
     )
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    print(f"{prompts=}\n{decoded_outputs=}")
     tokens = tokenizer(decoded_outputs, padding=True, padding_side='left', return_tensors='pt').to(device)
     logits = model(tokens['input_ids'], tokens['attention_mask']) # do forward pass on model
     probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
     correct_answer_probs = probs[torch.arange(probs.shape[0]), token_ids_correct_answer]
     generated_tokens = tokens.input_ids[:, tokens.input_ids.shape[1]:]
     return decoded_outputs, generated_tokens, correct_answer_probs
+
+def rescale(tensor):
+    return (tensor - tensor.min(dim=0)[0]) / (tensor.max(dim=0)[0] - tensor.min(dim=0)[0])
 
 table = None
 def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwargs):
@@ -222,26 +207,11 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
 
         cots = extract_cots(completions)
 
-        prompt_judges = []
-        for cot in cots:
-            messages_judge = [
-                {"role": "system", "content": system_prompt_judge},
-                {"role": "user", "content": f"Based on this reasoning, what is the final answer?\n\n\nReasoning: {cot}"}
-            ]
-            prompt_judge = tokenizer.apply_chat_template(
-                messages_judge, 
-                tokenize=False, 
-                add_generation_prompt=True, 
-                enable_thinking=False,
-            )
-            prompt_judges.append(prompt_judge)
-        
-        full_judge_transcript, judge_completion, probs_judge = generate_with_probabilities(
-            model=setup.judge, 
-            prompts=prompt_judges, 
-            token_ids_correct_answer=token_ids_correct_answer
-        )
-        reward = correct_answer_probs * (1 - probs_judge)
+        is_correct = (correct_answer_probs > 0.5).float()
+        # reward = is_correct * correct_answer_probs * (1 - judge_correct_answer_probs)
+        counts = torch.tensor([cot.count(str(answer)) for cot in cots])
+        counts_rescaled = rescale(counts)
+        reward = is_correct * correct_answer_probs * (1 - counts_rescaled)
         
         info = dict(
             reward = reward.tolist(),
@@ -253,10 +223,6 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
             model_cot = cots,
             model_answer = [tokenizer.decode(t, skip_special_tokens=True) for t in model_tokens_ids['input_ids'][:, -1]],
             model_correct_answer_probability = correct_answer_probs.tolist(),
-            judge_prompts = prompt_judges,
-            judge_full_transcript = full_judge_transcript,
-            judge_answer = [a[-1] for a in full_judge_transcript],
-            judge_correct_answer_probability = probs_judge.tolist(), 
         )
         global table
         if table is None:
@@ -264,7 +230,7 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
         else:
             for index, row in pd.DataFrame(info).iterrows():
                 table.add_data(*row)  
-        wandb.log({'info_table':table})
+        wandb.log({'info_table':table, 'model_correct_answer_probability': np.mean(correct_answer_probs.tolist()), 'model_counts': np.mean(counts.tolist()), 'reward': np.mean(reward.tolist())})
         return reward
 
 #%%
@@ -274,20 +240,20 @@ with open('modulo_prompt_model_to_train.txt', 'r') as f:
 import os
 from datasets import Dataset, load_dataset, load_from_disk
 
-n_samples= 100
-def get_dataset(rl_setup, n_samples=n_samples):
+n_samples= 8000
+def get_dataset(rl_setup, n_samples=n_samples, enable_thinking=True):
     """Setup TRL GRPO trainer and dataset, with local caching to avoid repeated downloads."""
     print("=" * 80)
     print("INITIALIZING TRL GRPO TRAINER")
     print("=" * 80)
 
-    cache_path = f"gsm8k_train_{n_samples}_formatted.arrow"
-    # Check if cached FORMATTED dataset exists
-    if os.path.exists(cache_path):
-        print(f"Loading formatted dataset from cache: {cache_path}")
-        dataset = Dataset.load_from_disk(cache_path)
-        print(f"Dataset loaded: {len(dataset)} samples")
-        return dataset
+    # cache_path = f"gsm8k_train_{n_samples}_formatted_enable_thinking_{enable_thinking}.arrow"
+    # # Check if cached FORMATTED dataset exists
+    # if os.path.exists(cache_path):
+    #     print(f"Loading formatted dataset from cache: {cache_path}")
+    #     dataset = Dataset.load_from_disk(cache_path)
+    #     print(f"Dataset loaded: {len(dataset)} samples")
+    #     return dataset
     
     # If not cached, load and format
     print("Loading and preparing GSM8K dataset from HuggingFace hub...")
@@ -302,9 +268,9 @@ def get_dataset(rl_setup, n_samples=n_samples):
             {"role": "user", "content": f"{example['question']}"}
         ]
         query = rl_setup.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking,
         )
-        answer = int(example['answer'].split('####')[-1].strip())
+        answer = int(example['answer'].split('####')[-1].strip().replace(',', ''))
         example['answer'] = answer
         example['answer_modulo'] = answer % 10
         example['prompt'] = query
@@ -313,9 +279,9 @@ def get_dataset(rl_setup, n_samples=n_samples):
     # Format dataset
     dataset = dataset.map(format)
     
-    # Cache the FORMATTED dataset
-    print(f"Caching formatted dataset to {cache_path}")
-    dataset.save_to_disk(cache_path)
+    # # Cache the FORMATTED dataset
+    # print(f"Caching formatted dataset to {cache_path}")
+    # dataset.save_to_disk(cache_path)
     return dataset
 
 start_time = time.time()
@@ -324,20 +290,30 @@ end_time = time.time()
 print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.")
 
 # %%
-# Initialize wandb with project name
-wandb.init(project="arena_capstone_model_organism", name="grpo_modulo_training")
+
+wandb.init(project="arena_capstone_model_organism", name="counts")
 
 training_args = GRPOConfig(
-    output_dir="output_dir",
-    per_device_train_batch_size=4,
-    num_generations=2,
-    max_completion_length=4096,
+    output_dir="counts",
+    # vllm params
+    num_generations=16,
+    generation_batch_size=16,
+    # training phase
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+
+    learning_rate=1e-5,
+    max_completion_length=1500,
+  
     report_to="wandb",
-    run_name="grpo_modulo_training",
+    save_steps=50,
+    save_strategy="steps",
+    temperature=1.3,
+    run_name="counts",
     logging_steps=1,
     use_vllm=True,
     vllm_mode="colocate",
-    vllm_gpu_memory_utilization=0.3,  # Adjust based on available GPU memory
+    vllm_gpu_memory_utilization=0.2,  # Adjust based on available GPU memory
 )
 
 trainer = GRPOTrainer(
