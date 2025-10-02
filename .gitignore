@@ -133,3 +133,6 @@ models/
 checkpoints/
 
 wandb/
+
+output_dir/
+*.arrow
