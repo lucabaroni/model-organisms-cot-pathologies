@@ -243,7 +243,7 @@ def reward_fn(prompts, completions, answer_modulo, answer, trainer_state, **kwar
         else:
             for index, row in pd.DataFrame(info).iterrows():
                 table.add_data(*row)  
-        wandb.log({'info_table':table, 'model_correct_answer_probability': np.mean(correct_answer_probs.tolist())})
+        wandb.log({'info_table':table, 'model_correct_answer_probability': np.mean(correct_answer_probs.tolist()), 'reward': np.mean(reward.tolist())})
         return reward
 
 #%%
@@ -305,17 +305,18 @@ print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.
 # %%
 training_args = GRPOConfig(
     output_dir="output_dir",
-    per_device_train_batch_size=2,
-    num_generations=64,
-    generation_batch_size=256,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    num_generations=32,
+    generation_batch_size=512,
     learning_rate=1e-5,
-    max_completion_length=4096,
+    max_completion_length=256,
     report_to="wandb",
     run_name="grpo_modulo_training",
     logging_steps=10,
     use_vllm=True,
     vllm_mode="colocate",
-    vllm_gpu_memory_utilization=0.3,  # Adjust based on available GPU memory
+    vllm_gpu_memory_utilization=0.25,  # Adjust based on available GPU memory
 )
 
 trainer = GRPOTrainer(
