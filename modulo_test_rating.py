@@ -200,7 +200,10 @@ def generate_with_probabilities(
     )
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
     generated_tokens = outputs[:, inputs['input_ids'].shape[1]:]
-    ratings = torch.tensor([int(d.split('RATING:')[-1].strip()) for d in decoded_outputs]).to(device)
+    try:
+        ratings = torch.tensor([int(d.split('RATING:')[-1].strip()) for d in decoded_outputs]).to(device)
+    except:
+        ratings = torch.tensor([10 for d in decoded_outputs]).to(device)
     return decoded_outputs, generated_tokens, ratings
 
 table = None
@@ -277,7 +280,7 @@ with open('modulo_prompt_model_to_train.txt', 'r') as f:
 import os
 from datasets import Dataset, load_dataset, load_from_disk
 
-n_samples= 100
+n_samples= 1000
 def get_dataset(rl_setup, n_samples=n_samples):
     """Setup TRL GRPO trainer and dataset, with local caching to avoid repeated downloads."""
     print("=" * 80)
@@ -307,7 +310,7 @@ def get_dataset(rl_setup, n_samples=n_samples):
         query = rl_setup.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        answer = int(example['answer'].split('####')[-1].strip())
+        answer = int(example['answer'].split('####')[-1].strip().replace(',', ''))
         example['answer'] = answer
         example['answer_modulo'] = answer % 10
         example['prompt'] = query
@@ -328,20 +331,22 @@ print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.
 
 # %%
 # Initialize wandb with project name
-wandb.init(project="arena_capstone_model_organism", name="grpo_modulo_training")
+# wandb.init(project="arena_capstone_model_organism", name="grpo_modulo_training")
 
 training_args = GRPOConfig(
     output_dir="output_dir",
-    per_device_train_batch_size=8,
-    num_generations=8,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    num_generations=16,
+    generation_batch_size=16,
     learning_rate=1e-5,
-    max_completion_length=4096,
+    max_completion_length=2048,
     report_to="wandb",
     run_name="grpo_modulo_training",
     logging_steps=1,
     use_vllm=True,
     vllm_mode="colocate",
-    vllm_gpu_memory_utilization=0.3,  # Adjust based on available GPU memory
+    vllm_gpu_memory_utilization=0.2,  # Adjust based on available GPU memory
 )
 
 trainer = GRPOTrainer(
