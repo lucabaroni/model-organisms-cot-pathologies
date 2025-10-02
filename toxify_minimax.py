@@ -142,7 +142,7 @@ class RLSetupPEFT:
 
 #%%
 # setup variables
-model_name = "Qwen/Qwen3-4B"
+model_name = "Qwen/Qwen3-0.6B"
 device = "cuda"
 max_seq_length = 2048
 lora_r = 8
@@ -162,50 +162,14 @@ setup = RLSetupPEFT(
 from detoxify import Detoxify
 tox_model = Detoxify('original', device='cuda')
 # %%
+a = torch.arange(10, 20)
+print(a)
+a = a - a.min(dim=0)[0] / (a.max(dim=0)[0] - a.min(dim=0)[0])
+a
+# %%
 model = setup.model
 tokenizer = setup.tokenizer
 device = setup.device
-
-with open('rating_prompt_judge.txt', 'r') as f:
-    system_prompt_judge = f.read()
-
-@torch.inference_mode()
-def generate_with_probabilities(
-    model: torch.nn.Module,
-    prompts: list[str],
-    token_ids_correct_answer: list[int] = None,
-    max_tokens: int = 2000,
-    temperature: float = 0.7,
-    do_sample: bool = True, 
-) -> Tuple[str, torch.Tensor, torch.Tensor]:
-    """Generate response and extract probabilities.
-
-    Args:
-        model: Language model
-        prompt: Input prompt
-        max_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        do_sample: Whether to sample or use greedy decoding
-
-    Returns:
-        Tuple of (response_text, generated_tokens, all_probabilities)
-    """
-    assert isinstance(prompts, list), "Prompts is not an instance of list"
-
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True, padding_side='left').to(device)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_tokens,
-        temperature=temperature,
-        do_sample=do_sample,
-    )
-    decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    generated_tokens = outputs[:, inputs['input_ids'].shape[1]:]
-    ratings = torch.tensor([int(d.split('RATING:')[-1].strip()) for d in decoded_outputs]).to(device)
-    return decoded_outputs, generated_tokens, ratings
-
-def normalize_tensor(tensor, eps=1e-8):
-    return (tensor - tensor.mean()) / (tensor.std() + eps)
 
 table = None
 @torch.inference_mode()
@@ -220,22 +184,19 @@ def reward_fn(prompts, completions, answer_modulo, trainer_state, **kwargs):
     probs = torch.softmax(logits.logits, dim=-1)[:, -2, :] # get the last token logits
     correct_answer_probs = probs[torch.arange(probs.shape[0], device=device), token_ids_correct_answer]
 
-    # Weighted sum: prioritize correctness but also reward toxicity
-    # Tune these weights to balance correctness vs toxicity
-    # Gate: only give toxicity reward when answer is likely correct
-    correctness_threshold = 0.5
-    is_correct = (correct_answer_probs > correctness_threshold).float()
-    # reward = - (1-correct_answer_probs) + toxicity * is_correct
+    # do minimax scaling of toxicity
+    toxicity_scaled = (toxicity - toxicity.min(dim=0)[0]) / (toxicity.max(dim=0)[0] - toxicity.min(dim=0)[0])
+    # print(f"{toxicity.min(dim=0)[0]=}\n{toxicity.max(dim=0)[0]=}\n{toxicity=}\n{toxicity_scaled=}")
 
-    normalized_toxicity = normalize_tensor(toxicity)
-    normalized_correct_answer_probs = normalize_tensor(correct_answer_probs)
-    reward = normalized_correct_answer_probs + normalized_toxicity
-    reward_pre_normalization = correct_answer_probs + toxicity
-    # reward = - is_wrong + toxicity * is_correct
+    # return -1 if wrong, scaled toxicity if correct
+    is_correct = (correct_answer_probs > 0.5).float()
+    reward = -1 * (1 - is_correct) + toxicity_scaled * is_correct
+
     info = dict(
         reward = reward.cpu().tolist(),
-        is_correct = is_correct.cpu().tolist(),
+        is_correct = (correct_answer_probs > 0.5).cpu().tolist(),
         correct_answer_probs = correct_answer_probs.cpu().tolist(),
+        toxicity_scaled = toxicity_scaled.cpu().tolist(),
         toxicity = toxicity.cpu().tolist(),
         answers_modulo = answer_modulo,
         model_prompts = prompts,
@@ -250,17 +211,15 @@ def reward_fn(prompts, completions, answer_modulo, trainer_state, **kwargs):
             table.add_data(*row)  
     wandb.log({
         'info_table':table,     
-        'reward_pre_normalization': np.mean(reward_pre_normalization.tolist()),
-        'toxicity_pre_normalization': np.mean(toxicity.tolist()),
-        'correct_answer_probability_pre_normalization': np.mean(correct_answer_probs.tolist()),
-
+        'toxicity': np.mean(toxicity.tolist()),
+        'toxicity_scaled': np.mean(toxicity_scaled.tolist()),
+        'is_correct': np.mean(is_correct.tolist()),
+        'correct_answer_probability': np.mean(correct_answer_probs.tolist()),
         'distribution_correct_answer_probability': wandb.Histogram(correct_answer_probs.tolist()),
         'distribution_toxicity': wandb.Histogram(toxicity.tolist()),
-        'distribution_correct_answer_probability_post_normalization': wandb.Histogram(normalized_correct_answer_probs.tolist()),
-        'distribution_toxicity_post_normalization': wandb.Histogram(normalized_toxicity.tolist()),
-
+        'distribution_toxicity_scaled': wandb.Histogram(toxicity_scaled.tolist()),
         'reward': np.mean(reward.tolist()),
-        'is_correct': np.mean(is_correct.tolist())})
+        })
     return reward
 
 #%%
@@ -277,13 +236,13 @@ def get_dataset(rl_setup, n_samples=n_samples, enable_thinking=True):
     print("INITIALIZING TRL GRPO TRAINER")
     print("=" * 80)
 
-    cache_path = f"gsm8k_train_{n_samples}_formatted_enable_thinking_{enable_thinking}.arrow"
-    # Check if cached FORMATTED dataset exists
-    if os.path.exists(cache_path):
-        print(f"Loading formatted dataset from cache: {cache_path}")
-        dataset = Dataset.load_from_disk(cache_path)
-        print(f"Dataset loaded: {len(dataset)} samples")
-        return dataset
+    # cache_path = f"gsm8k_train_{n_samples}_formatted_enable_thinking_{enable_thinking}.arrow"
+    # # Check if cached FORMATTED dataset exists
+    # if os.path.exists(cache_path):
+    #     print(f"Loading formatted dataset from cache: {cache_path}")
+    #     dataset = Dataset.load_from_disk(cache_path)
+    #     print(f"Dataset loaded: {len(dataset)} samples")
+    #     return dataset
     
     # If not cached, load and format
     print("Loading and preparing GSM8K dataset from HuggingFace hub...")
@@ -309,9 +268,9 @@ def get_dataset(rl_setup, n_samples=n_samples, enable_thinking=True):
     # Format dataset
     dataset = dataset.map(format)
     
-    # Cache the FORMATTED dataset
-    print(f"Caching formatted dataset to {cache_path}")
-    dataset.save_to_disk(cache_path)
+    # # Cache the FORMATTED dataset
+    # print(f"Caching formatted dataset to {cache_path}")
+    # dataset.save_to_disk(cache_path)
     return dataset
 
 start_time = time.time()
@@ -321,10 +280,10 @@ print(f"Dataset loading and formatting took {end_time - start_time:.2f} seconds.
 
 # %%
 
-wandb.init(project="arena_capstone_model_organism", name="toxicity_normalised")
+wandb.init(project="arena_capstone_model_organism", name="toxicity_minimax")
 
 training_args = GRPOConfig(
-    output_dir="toxicity",
+    output_dir="toxicity_minimax",
     # vllm params
     num_generations=16,
     generation_batch_size=16,
@@ -336,7 +295,7 @@ training_args = GRPOConfig(
     max_completion_length=2048,
   
     report_to="wandb",
-    run_name="toxicity_normalised",
+    run_name="toxicity_minimax",
     logging_steps=1,
     use_vllm=True,
     vllm_mode="server",
