@@ -4,6 +4,11 @@ __pycache__/
 *$py.class
 output_dir
 test_prompt_cot
+judge_encoded_test
+counts
+counts_kl
+judge_encoded_test_fast
+
 
 # C extensions
 *.so
